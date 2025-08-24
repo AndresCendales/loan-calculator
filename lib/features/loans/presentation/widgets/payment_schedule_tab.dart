@@ -51,15 +51,109 @@ class _PaymentScheduleTabState extends State<PaymentScheduleTab> {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        // Header with export button - Fixed height
+        // Fixed header only
         Container(
-          padding: const EdgeInsets.all(16),
-          child: Row(
+          height: 56,
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceVariant,
+            border: Border(
+              bottom: BorderSide(
+                color: Theme.of(context).dividerColor,
+                width: 1,
+              ),
+            ),
+          ),
+          child: NotificationListener<ScrollNotification>(
+            onNotification: (notification) {
+              if (notification is ScrollUpdateNotification) {
+                _syncScroll(_headerScrollController, _bodyScrollController);
+              }
+              return false;
+            },
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              controller: _headerScrollController,
+              child: Row(
+              children: [
+                _buildHeaderCell('#', 60),
+                _buildHeaderCell('Date', 110),
+                _buildHeaderCell('Initial Balance', 140),
+                _buildHeaderCell('Interest', 120),
+                _buildHeaderCell('Principal', 120),
+                _buildHeaderCell('Payment', 120),
+                _buildHeaderCell('Insurance', 120),
+                _buildHeaderCell('Total', 120),
+                _buildHeaderCell('Final Balance', 150),
+              ],
+              ),
+            ),
+          ),
+        ),
+        // Scrollable content with unified summary
+        Expanded(
+          child: NotificationListener<ScrollNotification>(
+            onNotification: (notification) {
+              if (notification is ScrollUpdateNotification) {
+                _syncScroll(_bodyScrollController, _headerScrollController);
+              }
+              return false;
+            },
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              controller: _bodyScrollController,
+              child: SizedBox(
+                width: 1070, // Total width of all columns (60+110+140+120+120+120+120+120+150) + padding
+                child: CustomScrollView(
+                  slivers: [
+                    // Header with export button and summary info
+                    SliverToBoxAdapter(
+                      child: _buildUnifiedSummary(context),
+                    ),
+                    // Payment schedule rows
+                    SliverList(
+                      delegate: SliverChildBuilderDelegate(
+                        (context, index) => _buildCombinedRow(context, index),
+                        childCount: _getCombinedRowsCount(),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildUnifiedSummary(BuildContext context) {
+    final totalInterest = widget.schedule.installments
+        .fold(widget.loan.principal * Decimal.zero, (sum, installment) => sum + installment.interes);
+    final totalInsurance = widget.schedule.installments
+        .fold(widget.loan.principal * Decimal.zero, (sum, installment) => sum + installment.seguro);
+    final totalPayments = widget.schedule.installments
+        .fold(widget.loan.principal * Decimal.zero, (sum, installment) => sum + installment.totalMes);
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceVariant,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header row with installments count and export button
+          Row(
             children: [
               Expanded(
                 child: Text(
                   '${widget.schedule.installments.length} installments',
-                  style: Theme.of(context).textTheme.titleMedium,
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ),
               ElevatedButton.icon(
@@ -69,82 +163,39 @@ class _PaymentScheduleTabState extends State<PaymentScheduleTab> {
               ),
             ],
           ),
-        ),
-        // Table section - Flexible to prevent overflow
-        Flexible(
-          child: Column(
+          const SizedBox(height: 16),
+          // Summary information
+          Text(
+            'Payment Summary',
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
             children: [
-              // Fixed header
-              Container(
-                height: 56,
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.surfaceVariant,
-                  border: Border(
-                    bottom: BorderSide(
-                      color: Theme.of(context).dividerColor,
-                      width: 1,
-                    ),
-                  ),
-                ),
-                child: NotificationListener<ScrollNotification>(
-                  onNotification: (notification) {
-                    if (notification is ScrollUpdateNotification) {
-                      _syncScroll(_headerScrollController, _bodyScrollController);
-                    }
-                    return false;
-                  },
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    controller: _headerScrollController,
-                    child: Row(
-                    children: [
-                      _buildHeaderCell('#', 60),
-                      _buildHeaderCell('Date', 110),
-                      _buildHeaderCell('Initial Balance', 140),
-                      _buildHeaderCell('Interest', 120),
-                      _buildHeaderCell('Principal', 120),
-                      _buildHeaderCell('Payment', 120),
-                      _buildHeaderCell('Insurance', 120),
-                      _buildHeaderCell('Total', 120),
-                      _buildHeaderCell('Final Balance', 150),
-                    ],
-                    ),
-                  ),
+              Expanded(
+                child: _SummaryItem(
+                  label: 'Total Interest',
+                  value: LoanFormatters.formatCurrency(totalInterest),
                 ),
               ),
-              // Scrollable rows
               Expanded(
-                child: NotificationListener<ScrollNotification>(
-                  onNotification: (notification) {
-                    if (notification is ScrollUpdateNotification) {
-                      _syncScroll(_bodyScrollController, _headerScrollController);
-                    }
-                    return false;
-                  },
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    controller: _bodyScrollController,
-                    child: SizedBox(
-                    width: 1070, // Total width of all columns (60+110+140+120+120+120+120+120+150) + padding
-                    child: ListView.builder(
-                      itemCount: _getCombinedRowsCount(),
-                      itemBuilder: (context, index) {
-                        return _buildCombinedRow(context, index);
-                      },
-                    ),
-                    ),
-                  ),
+                child: _SummaryItem(
+                  label: 'Total Insurance',
+                  value: LoanFormatters.formatCurrency(totalInsurance),
                 ),
               ),
             ],
           ),
-        ),
-        // Summary card - Flexible to prevent overflow
-        Flexible(
-          flex: 0,
-          child: _buildSummaryCard(),
-        ),
-      ],
+          const SizedBox(height: 8),
+          _SummaryItem(
+            label: 'Total Amount to Pay',
+            value: LoanFormatters.formatCurrency(totalPayments),
+            isTotal: true,
+          ),
+        ],
+      ),
     );
   }
 
