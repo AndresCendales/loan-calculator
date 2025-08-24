@@ -1,0 +1,389 @@
+import 'package:flutter_test/flutter_test.dart';
+import 'package:decimal/decimal.dart';
+import 'package:loan_calculator/features/loans/domain/entities/loan.dart';
+import 'package:loan_calculator/features/loans/domain/entities/insurance_config.dart';
+import 'package:loan_calculator/features/loans/domain/entities/early_repayment.dart';
+import 'package:loan_calculator/features/loans/domain/services/schedule_calculator.dart';
+
+void main() {
+  group('ScheduleCalculator', () {
+    late ScheduleCalculator calculator;
+
+    setUp(() {
+      calculator = const ScheduleCalculator();
+    });
+
+    group('monthlyRateFromTea', () {
+      test('converts TEA to TEM correctly', () {
+        // TEA of 12% should give TEM of approximately 0.9489%
+        final tea = Decimal.parse('0.12');
+        final tem = calculator.monthlyRateFromTea(tea);
+        
+        expect(tem.toDouble(), closeTo(0.009489, 0.0001));
+      });
+
+      test('returns zero for zero TEA', () {
+        final tea = Decimal.zero;
+        final tem = calculator.monthlyRateFromTea(tea);
+        
+        expect(tem, equals(Decimal.zero));
+      });
+    });
+
+    group('computeFixedInstallment', () {
+      test('calculates fixed installment with interest', () {
+        final principal = Decimal.parse('100000');
+        final monthlyRate = Decimal.parse('0.01'); // 1% monthly
+        const terms = 12;
+
+        final payment = calculator.computeFixedInstallment(principal, monthlyRate, terms);
+        
+        // Expected payment for 100k at 1% monthly for 12 months
+        expect(payment.toDouble(), closeTo(8884.88, 0.01));
+      });
+
+      test('calculates fixed installment with zero interest', () {
+        final principal = Decimal.parse('100000');
+        final monthlyRate = Decimal.zero;
+        const terms = 12;
+
+        final payment = calculator.computeFixedInstallment(principal, monthlyRate, terms);
+        
+        expect(payment.toDouble(), closeTo(8333.33, 0.01));
+      });
+    });
+
+    group('buildInitialSchedule', () {
+      test('builds schedule with correct number of installments', () {
+        final loan = Loan(
+          id: 'test-1',
+          titulo: 'Test Loan',
+          principal: Decimal.parse('100000'),
+          plazoMeses: 12,
+          tea: Decimal.parse('0.12'),
+          fechaInicio: DateTime(2024, 1, 1),
+          seguroConfig: const InsuranceConfig(mode: InsuranceMode.none),
+        );
+
+        final schedule = calculator.buildInitialSchedule(loan);
+
+        expect(schedule.installments.length, equals(12));
+        expect(schedule.loanId, equals('test-1'));
+        expect(schedule.recalculos, equals(0));
+      });
+
+      test('builds schedule with flat insurance', () {
+        final loan = Loan(
+          id: 'test-2',
+          titulo: 'Test Loan with Insurance',
+          principal: Decimal.parse('100000'),
+          plazoMeses: 12,
+          tea: Decimal.parse('0.12'),
+          fechaInicio: DateTime(2024, 1, 1),
+          seguroConfig: InsuranceConfig(
+            mode: InsuranceMode.flat,
+            flatAmountPerMonth: Decimal.fromInt(50),
+          ),
+        );
+
+        final schedule = calculator.buildInitialSchedule(loan);
+        
+        // All installments should have $50 insurance
+        for (final installment in schedule.installments) {
+          expect(installment.seguro, equals(Decimal.fromInt(50)));
+        }
+      });
+
+      test('builds schedule with percentage insurance', () {
+        final loan = Loan(
+          id: 'test-3',
+          titulo: 'Test Loan with Percentage Insurance',
+          principal: Decimal.parse('100000'),
+          plazoMeses: 12,
+          tea: Decimal.parse('0.12'),
+          fechaInicio: DateTime(2024, 1, 1),
+          seguroConfig: InsuranceConfig(
+            mode: InsuranceMode.percentOfBalance,
+            monthlyPercentOfBalance: Decimal.parse('0.001'), // 0.1%
+          ),
+        );
+
+        final schedule = calculator.buildInitialSchedule(loan);
+        
+        // First installment should have insurance based on full principal
+        final firstInstallment = schedule.installments.first;
+        expect(firstInstallment.seguro.toDouble(), closeTo(100.0, 0.01)); // 0.1% of 100,000
+        
+        // Insurance should decrease as balance decreases
+        final lastInstallment = schedule.installments.last;
+        expect(lastInstallment.seguro < firstInstallment.seguro, isTrue);
+      });
+
+      test('final installment has zero balance', () {
+        final loan = Loan(
+          id: 'test-4',
+          titulo: 'Test Final Balance',
+          principal: Decimal.parse('100000'),
+          plazoMeses: 12,
+          tea: Decimal.parse('0.12'),
+          fechaInicio: DateTime(2024, 1, 1),
+          seguroConfig: const InsuranceConfig(mode: InsuranceMode.none),
+        );
+
+        final schedule = calculator.buildInitialSchedule(loan);
+        final finalInstallment = schedule.installments.last;
+        
+        expect(finalInstallment.saldoFinal.toDouble(), closeTo(0.0, 0.01));
+      });
+    });
+
+    group('applyEarlyRepayments', () {
+      late Loan baseLoan;
+      // late Schedule baseSchedule;
+
+      setUp(() {
+        baseLoan = Loan(
+          id: 'test-early',
+          titulo: 'Test Early Payment',
+          principal: Decimal.parse('100000'),
+          plazoMeses: 24,
+          tea: Decimal.parse('0.12'),
+          fechaInicio: DateTime(2024, 1, 1),
+          seguroConfig: const InsuranceConfig(mode: InsuranceMode.none),
+        );
+        // baseSchedule = calculator.buildInitialSchedule(baseLoan);
+      });
+
+      test('reduce payment early repayment decreases monthly payment', () {
+        final baseSchedule = calculator.buildInitialSchedule(baseLoan);
+        final earlyRepayment = EarlyRepayment(
+          id: 'early-1',
+          fecha: DateTime(2024, 6, 1), // 6 months in
+          monto: Decimal.parse('20000'),
+          tipo: EarlyType.reducePayment,
+        );
+
+        final newSchedule = calculator.applyEarlyRepayments(
+          baseSchedule,
+          baseLoan,
+          [earlyRepayment],
+        );
+
+        expect(newSchedule.cuota < baseSchedule.cuota, isTrue);
+        expect(newSchedule.recalculos, equals(1));
+      });
+
+      test('reduce term early repayment decreases number of installments', () {
+        final baseSchedule = calculator.buildInitialSchedule(baseLoan);
+        final earlyRepayment = EarlyRepayment(
+          id: 'early-2',
+          fecha: DateTime(2024, 6, 1), // 6 months in
+          monto: Decimal.parse('20000'),
+          tipo: EarlyType.reduceTerm,
+        );
+
+        final newSchedule = calculator.applyEarlyRepayments(
+          baseSchedule,
+          baseLoan,
+          [earlyRepayment],
+        );
+
+        expect(newSchedule.installments.length < baseSchedule.installments.length, isTrue);
+        expect(newSchedule.cuota, equals(baseSchedule.cuota)); // Payment stays same
+        expect(newSchedule.recalculos, equals(1));
+      });
+
+      test('multiple early repayments are processed in order', () {
+        final baseSchedule = calculator.buildInitialSchedule(baseLoan);
+        final early1 = EarlyRepayment(
+          id: 'early-1',
+          fecha: DateTime(2024, 3, 1),
+          monto: Decimal.parse('10000'),
+          tipo: EarlyType.reduceTerm,
+        );
+
+        final early2 = EarlyRepayment(
+          id: 'early-2',
+          fecha: DateTime(2024, 9, 1),
+          monto: Decimal.parse('15000'),
+          tipo: EarlyType.reducePayment,
+        );
+
+        final newSchedule = calculator.applyEarlyRepayments(
+          baseSchedule,
+          baseLoan,
+          [early1, early2],
+        );
+
+        expect(newSchedule.recalculos, equals(2));
+        expect(newSchedule.installments.length < baseSchedule.installments.length, isTrue);
+      });
+
+      test('early repayment larger than balance closes loan', () {
+        final baseSchedule = calculator.buildInitialSchedule(baseLoan);
+        final earlyRepayment = EarlyRepayment(
+          id: 'early-large',
+          fecha: DateTime(2024, 6, 1),
+          monto: Decimal.parse('200000'), // More than principal
+          tipo: EarlyType.reduceTerm,
+        );
+
+        final newSchedule = calculator.applyEarlyRepayments(
+          baseSchedule,
+          baseLoan,
+          [earlyRepayment],
+        );
+
+        // Should have fewer installments than the original schedule
+        expect(newSchedule.installments.length < baseSchedule.installments.length, isTrue);
+        expect(newSchedule.installments.last.saldoFinal, equals(Decimal.zero));
+      });
+    });
+
+    group('mapDateToInstallmentIndex', () {
+      test('maps dates to correct installment indices', () {
+        final startDate = DateTime(2024, 1, 15);
+        
+        // Same date should map to index 0 (first installment)
+        expect(calculator.mapDateToInstallmentIndex(startDate, startDate), equals(0));
+        
+        // One month later should map to index 1 (second installment)
+        final oneMonthLater = DateTime(2024, 2, 15);
+        expect(calculator.mapDateToInstallmentIndex(startDate, oneMonthLater), equals(1));
+        
+        // Date before start should map to index 0
+        final beforeStart = DateTime(2023, 12, 15);
+        expect(calculator.mapDateToInstallmentIndex(startDate, beforeStart), equals(0));
+      });
+    });
+
+    group('nthInstallmentDate', () {
+      test('calculates nth installment dates correctly', () {
+        final startDate = DateTime(2024, 1, 15);
+        
+        expect(calculator.nthInstallmentDate(startDate, 1), equals(startDate));
+        expect(calculator.nthInstallmentDate(startDate, 2), equals(DateTime(2024, 2, 15)));
+        expect(calculator.nthInstallmentDate(startDate, 13), equals(DateTime(2025, 1, 15)));
+      });
+
+      test('handles month overflow correctly', () {
+        final startDate = DateTime(2024, 1, 31);
+        
+        // February doesn't have 31 days, should use last day of February
+        expect(calculator.nthInstallmentDate(startDate, 2), equals(DateTime(2024, 2, 29))); // 2024 is leap year
+        
+        // March has 31 days, should use 31st
+        expect(calculator.nthInstallmentDate(startDate, 3), equals(DateTime(2024, 3, 31)));
+      });
+    });
+
+    group('Large loan calculations', () {
+      test('handles large principal amounts without infinite/NaN values', () {
+        final loan = Loan(
+          id: 'test-large',
+          titulo: 'Large Loan Test',
+          principal: Decimal.parse('201000000'), // 201 million
+          plazoMeses: 240, // 20 years
+          tea: Decimal.parse('0.10'), // 10% TEA
+          fechaInicio: DateTime(2024, 1, 1),
+          seguroConfig: const InsuranceConfig(mode: InsuranceMode.none),
+        );
+
+        final schedule = calculator.buildInitialSchedule(loan);
+        
+        // Check that all installments have valid values
+        for (int i = 0; i < schedule.installments.length; i++) {
+          final installment = schedule.installments[i];
+          
+          expect(installment.interes.toDouble().isFinite, isTrue, 
+            reason: 'Interest should be finite for installment ${i + 1}');
+          expect(installment.interes >= Decimal.zero, isTrue,
+            reason: 'Interest should be non-negative for installment ${i + 1}');
+          expect(installment.amortizacion.toDouble().isFinite, isTrue,
+            reason: 'Amortization should be finite for installment ${i + 1}');
+          expect(installment.saldoFinal >= Decimal.zero, isTrue,
+            reason: 'Final balance should be non-negative for installment ${i + 1}');
+        }
+        
+        // Verify the schedule has the expected number of installments
+        expect(schedule.installments.length, equals(240));
+        
+        // Verify the final installment has zero balance
+        final finalInstallment = schedule.installments.last;
+        expect(finalInstallment.saldoFinal.toDouble(), closeTo(0.0, 1.0));
+      });
+
+      test('handles extreme large amounts gracefully', () {
+        final loan = Loan(
+          id: 'test-extreme',
+          titulo: 'Extreme Large Loan Test',
+          principal: Decimal.parse('1000000000'), // 1 billion
+          plazoMeses: 360, // 30 years
+          tea: Decimal.parse('0.05'), // 5% TEA
+          fechaInicio: DateTime(2024, 1, 1),
+          seguroConfig: const InsuranceConfig(mode: InsuranceMode.none),
+        );
+
+        // Should not throw an exception
+        expect(() => calculator.buildInitialSchedule(loan), returnsNormally);
+        
+        final schedule = calculator.buildInitialSchedule(loan);
+        
+        // Basic validation
+        expect(schedule.installments.isNotEmpty, isTrue);
+        expect(schedule.cuota > Decimal.zero, isTrue);
+        expect(schedule.cuota.toDouble().isFinite, isTrue);
+      });
+
+      test('handles early repayments on large loans without NaN values', () {
+        final loan = Loan(
+          id: 'test-large-early',
+          titulo: 'Large Loan with Early Payment',
+          principal: Decimal.parse('201000000'), // 201 million
+          plazoMeses: 240, // 20 years
+          tea: Decimal.parse('0.10'), // 10% TEA
+          fechaInicio: DateTime(2024, 1, 1),
+          seguroConfig: const InsuranceConfig(mode: InsuranceMode.none),
+        );
+
+        final baseSchedule = calculator.buildInitialSchedule(loan);
+        
+        final earlyRepayment = EarlyRepayment(
+          id: 'early-test',
+          fecha: DateTime(2024, 6, 1), // 6 months in
+          monto: Decimal.parse('10000000'), // 10 million early payment
+          tipo: EarlyType.reducePayment,
+        );
+
+        final newSchedule = calculator.applyEarlyRepayments(
+          baseSchedule,
+          loan,
+          [earlyRepayment],
+        );
+
+        // Verify no NaN values in the schedule
+        for (int i = 0; i < newSchedule.installments.length; i++) {
+          final installment = newSchedule.installments[i];
+          
+          expect(installment.interes.toDouble().isFinite, isTrue, 
+            reason: 'Interest should be finite for installment ${i + 1}');
+          expect(installment.interes.toDouble().isNaN, isFalse,
+            reason: 'Interest should not be NaN for installment ${i + 1}');
+          expect(installment.amortizacion.toDouble().isFinite, isTrue,
+            reason: 'Amortization should be finite for installment ${i + 1}');
+          expect(installment.amortizacion.toDouble().isNaN, isFalse,
+            reason: 'Amortization should not be NaN for installment ${i + 1}');
+          expect(installment.saldoFinal.toDouble().isFinite, isTrue,
+            reason: 'Final balance should be finite for installment ${i + 1}');
+          expect(installment.saldoFinal.toDouble().isNaN, isFalse,
+            reason: 'Final balance should not be NaN for installment ${i + 1}');
+        }
+        
+        // Verify the schedule is valid
+        expect(newSchedule.cuota.toDouble().isFinite, isTrue);
+        expect(newSchedule.cuota.toDouble().isNaN, isFalse);
+        expect(newSchedule.installments.isNotEmpty, isTrue);
+      });
+    });
+  });
+}
