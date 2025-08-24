@@ -104,7 +104,7 @@ class LoanCard extends ConsumerWidget {
                   Expanded(
                     child: _InfoItem(
                       label: 'Principal',
-                      value: LoanFormatters.formatCurrency(loan.principal),
+                      value: LoanFormatters.formatPrincipal(loan.principal),
                     ),
                   ),
                   Expanded(

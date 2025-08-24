@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:decimal/decimal.dart';
 import '../../domain/entities/loan.dart';
 import '../../domain/entities/early_repayment.dart';
+import '../../domain/services/schedule_calculator.dart';
 import '../../utils/formatters.dart';
 import '../providers/loans_providers.dart';
 
@@ -33,6 +35,8 @@ class EarlyRepaymentsTab extends ConsumerWidget {
             ],
           ),
         ),
+        // Savings summary section
+        if (loan.earlyRepayments.isNotEmpty) _buildSavingsSummary(context),
         Expanded(
           child: loan.earlyRepayments.isEmpty
               ? Center(
@@ -134,6 +138,92 @@ class EarlyRepaymentsTab extends ConsumerWidget {
     );
   }
 
+  Widget _buildSavingsSummary(BuildContext context) {
+    final calculator = const ScheduleCalculator();
+    
+    // Calculate original schedule without early repayments
+    final originalSchedule = calculator.buildInitialSchedule(loan.copyWith(earlyRepayments: []));
+    
+    // Calculate current schedule with early repayments
+    final currentSchedule = calculator.applyEarlyRepayments(originalSchedule, loan, loan.earlyRepayments);
+    
+    // Calculate savings based on remaining payments from the earliest early repayment date
+    final earliestEarlyDate = loan.earlyRepayments.isNotEmpty 
+        ? loan.earlyRepayments.map((e) => e.fecha).reduce((a, b) => a.isBefore(b) ? a : b)
+        : loan.fechaInicio;
+    
+    // Find the installment index for the earliest early repayment
+    final earlyInstallmentIndex = calculator.mapDateToInstallmentIndex(loan.fechaInicio, earliestEarlyDate);
+    
+    // Calculate what would have been paid from the early repayment date onwards (without early repayments)
+    final originalRemainingTotal = originalSchedule.installments
+        .where((installment) => installment.numero > earlyInstallmentIndex)
+        .fold(Decimal.zero, (sum, installment) => sum + installment.totalMes);
+    
+    // Calculate what will actually be paid from now on (with early repayments)
+    final currentRemainingTotal = currentSchedule.installments
+        .where((installment) => installment.numero > earlyInstallmentIndex)
+        .fold(Decimal.zero, (sum, installment) => sum + installment.totalMes);
+    
+    final moneySaved = originalRemainingTotal - currentRemainingTotal;
+    final timeSaved = originalSchedule.installments
+        .where((installment) => installment.numero > earlyInstallmentIndex).length - 
+        currentSchedule.installments
+        .where((installment) => installment.numero > earlyInstallmentIndex).length;
+    
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.primaryContainer,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.savings,
+                color: Theme.of(context).colorScheme.onPrimaryContainer,
+                size: 24,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'Savings Summary',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                  color: Theme.of(context).colorScheme.onPrimaryContainer,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: _SavingsItem(
+                  icon: Icons.attach_money,
+                  label: 'Money Saved',
+                  value: LoanFormatters.formatCurrency(moneySaved),
+                  color: Theme.of(context).colorScheme.onPrimaryContainer,
+                ),
+              ),
+              Expanded(
+                child: _SavingsItem(
+                  icon: Icons.schedule,
+                  label: 'Time Saved',
+                  value: '$timeSaved months',
+                  color: Theme.of(context).colorScheme.onPrimaryContainer,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   Color _getTypeColor(EarlyType type) {
     switch (type) {
       case EarlyType.reducePayment:
@@ -218,5 +308,52 @@ class EarlyRepaymentsTab extends ConsumerWidget {
         }
       }
     }
+  }
+}
+
+class _SavingsItem extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+  final Color color;
+
+  const _SavingsItem({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(
+              icon,
+              color: color,
+              size: 16,
+            ),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: color.withOpacity(0.8),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Text(
+          value,
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.bold,
+            color: color,
+          ),
+        ),
+      ],
+    );
   }
 }

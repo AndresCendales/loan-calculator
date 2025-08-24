@@ -393,7 +393,7 @@ class _LoanFormPageState extends ConsumerState<LoanFormPage> {
       children: [
         Expanded(
           child: OutlinedButton(
-            onPressed: () => context.pop(),
+            onPressed: _isLoading ? null : () => context.go('/'),
             child: const Text('Cancel'),
           ),
         ),
@@ -485,7 +485,9 @@ class _LoanFormPageState extends ConsumerState<LoanFormPage> {
             backgroundColor: Colors.green,
           ),
         );
-        context.pop();
+        
+        // Navigate back to loans list
+        context.go('/');
       }
     } catch (e) {
       if (mounted) {

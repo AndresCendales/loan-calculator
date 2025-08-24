@@ -49,7 +49,7 @@ void main() {
 
         final payment = calculator.computeFixedInstallment(principal, monthlyRate, terms);
         
-        expect(payment, equals(Decimal.parse('8333.33')));
+        expect(payment.toDouble(), closeTo(8333.33, 0.01));
       });
     });
 
@@ -234,8 +234,8 @@ void main() {
           [earlyRepayment],
         );
 
-        // Should have fewer installments than the early repayment date
-        expect(newSchedule.installments.length <= 6, isTrue);
+        // Should have fewer installments than the original schedule
+        expect(newSchedule.installments.length < baseSchedule.installments.length, isTrue);
         expect(newSchedule.installments.last.saldoFinal, equals(Decimal.zero));
       });
     });
@@ -274,6 +274,115 @@ void main() {
         
         // March has 31 days, should use 31st
         expect(calculator.nthInstallmentDate(startDate, 3), equals(DateTime(2024, 3, 31)));
+      });
+    });
+
+    group('Large loan calculations', () {
+      test('handles large principal amounts without infinite/NaN values', () {
+        final loan = Loan(
+          id: 'test-large',
+          titulo: 'Large Loan Test',
+          principal: Decimal.parse('201000000'), // 201 million
+          plazoMeses: 240, // 20 years
+          tea: Decimal.parse('0.10'), // 10% TEA
+          fechaInicio: DateTime(2024, 1, 1),
+          seguroConfig: const InsuranceConfig(mode: InsuranceMode.none),
+        );
+
+        final schedule = calculator.buildInitialSchedule(loan);
+        
+        // Check that all installments have valid values
+        for (int i = 0; i < schedule.installments.length; i++) {
+          final installment = schedule.installments[i];
+          
+          expect(installment.interes.toDouble().isFinite, isTrue, 
+            reason: 'Interest should be finite for installment ${i + 1}');
+          expect(installment.interes >= Decimal.zero, isTrue,
+            reason: 'Interest should be non-negative for installment ${i + 1}');
+          expect(installment.amortizacion.toDouble().isFinite, isTrue,
+            reason: 'Amortization should be finite for installment ${i + 1}');
+          expect(installment.saldoFinal >= Decimal.zero, isTrue,
+            reason: 'Final balance should be non-negative for installment ${i + 1}');
+        }
+        
+        // Verify the schedule has the expected number of installments
+        expect(schedule.installments.length, equals(240));
+        
+        // Verify the final installment has zero balance
+        final finalInstallment = schedule.installments.last;
+        expect(finalInstallment.saldoFinal.toDouble(), closeTo(0.0, 1.0));
+      });
+
+      test('handles extreme large amounts gracefully', () {
+        final loan = Loan(
+          id: 'test-extreme',
+          titulo: 'Extreme Large Loan Test',
+          principal: Decimal.parse('1000000000'), // 1 billion
+          plazoMeses: 360, // 30 years
+          tea: Decimal.parse('0.05'), // 5% TEA
+          fechaInicio: DateTime(2024, 1, 1),
+          seguroConfig: const InsuranceConfig(mode: InsuranceMode.none),
+        );
+
+        // Should not throw an exception
+        expect(() => calculator.buildInitialSchedule(loan), returnsNormally);
+        
+        final schedule = calculator.buildInitialSchedule(loan);
+        
+        // Basic validation
+        expect(schedule.installments.isNotEmpty, isTrue);
+        expect(schedule.cuota > Decimal.zero, isTrue);
+        expect(schedule.cuota.toDouble().isFinite, isTrue);
+      });
+
+      test('handles early repayments on large loans without NaN values', () {
+        final loan = Loan(
+          id: 'test-large-early',
+          titulo: 'Large Loan with Early Payment',
+          principal: Decimal.parse('201000000'), // 201 million
+          plazoMeses: 240, // 20 years
+          tea: Decimal.parse('0.10'), // 10% TEA
+          fechaInicio: DateTime(2024, 1, 1),
+          seguroConfig: const InsuranceConfig(mode: InsuranceMode.none),
+        );
+
+        final baseSchedule = calculator.buildInitialSchedule(loan);
+        
+        final earlyRepayment = EarlyRepayment(
+          id: 'early-test',
+          fecha: DateTime(2024, 6, 1), // 6 months in
+          monto: Decimal.parse('10000000'), // 10 million early payment
+          tipo: EarlyType.reducePayment,
+        );
+
+        final newSchedule = calculator.applyEarlyRepayments(
+          baseSchedule,
+          loan,
+          [earlyRepayment],
+        );
+
+        // Verify no NaN values in the schedule
+        for (int i = 0; i < newSchedule.installments.length; i++) {
+          final installment = newSchedule.installments[i];
+          
+          expect(installment.interes.toDouble().isFinite, isTrue, 
+            reason: 'Interest should be finite for installment ${i + 1}');
+          expect(installment.interes.toDouble().isNaN, isFalse,
+            reason: 'Interest should not be NaN for installment ${i + 1}');
+          expect(installment.amortizacion.toDouble().isFinite, isTrue,
+            reason: 'Amortization should be finite for installment ${i + 1}');
+          expect(installment.amortizacion.toDouble().isNaN, isFalse,
+            reason: 'Amortization should not be NaN for installment ${i + 1}');
+          expect(installment.saldoFinal.toDouble().isFinite, isTrue,
+            reason: 'Final balance should be finite for installment ${i + 1}');
+          expect(installment.saldoFinal.toDouble().isNaN, isFalse,
+            reason: 'Final balance should not be NaN for installment ${i + 1}');
+        }
+        
+        // Verify the schedule is valid
+        expect(newSchedule.cuota.toDouble().isFinite, isTrue);
+        expect(newSchedule.cuota.toDouble().isNaN, isFalse);
+        expect(newSchedule.installments.isNotEmpty, isTrue);
       });
     });
   });

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:decimal/decimal.dart';
 import '../providers/loans_providers.dart';
 import '../widgets/payment_schedule_tab.dart';
 import '../widgets/early_repayments_tab.dart';
@@ -19,6 +20,10 @@ class LoanDetailPage extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Loan Details'),
+        leading: IconButton(
+          onPressed: () => context.go('/'),
+          icon: const Icon(Icons.arrow_back),
+        ),
         actions: [
           IconButton(
             onPressed: () => context.go('/loan/$loanId/edit'),
@@ -105,6 +110,13 @@ class LoanDetailPage extends ConsumerWidget {
   }
 
   Widget _buildLoanHeader(BuildContext context, loan, schedule) {
+    // Calculate average total monthly payment (including insurance)
+    final averageTotalPayment = schedule.installments.isNotEmpty
+        ? Decimal.parse((schedule.installments
+            .fold(loan.principal * Decimal.zero, (sum, installment) => sum + installment.totalMes) /
+          Decimal.fromInt(schedule.installments.length)).toDouble().toString())
+        : Decimal.zero;
+    
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(16),
@@ -131,12 +143,12 @@ class LoanDetailPage extends ConsumerWidget {
               Expanded(
                 child: _HeaderItem(
                   label: 'Principal',
-                  value: LoanFormatters.formatCurrency(loan.principal),
+                  value: LoanFormatters.formatPrincipal(loan.principal),
                 ),
               ),
               Expanded(
                 child: _HeaderItem(
-                  label: 'Current Payment',
+                  label: 'Monthly Payment',
                   value: LoanFormatters.formatCurrency(schedule.cuota),
                 ),
               ),
@@ -155,6 +167,24 @@ class LoanDetailPage extends ConsumerWidget {
                 child: _HeaderItem(
                   label: 'TEA',
                   value: LoanFormatters.formatPercentage(loan.tea),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: _HeaderItem(
+                  label: 'Total Monthly Payment',
+                  value: LoanFormatters.formatCurrency(averageTotalPayment),
+                  isHighlight: true,
+                ),
+              ),
+              Expanded(
+                child: _HeaderItem(
+                  label: 'Remaining Installments',
+                  value: '${schedule.installments.length}',
                 ),
               ),
             ],
@@ -185,10 +215,12 @@ class LoanDetailPage extends ConsumerWidget {
 class _HeaderItem extends StatelessWidget {
   final String label;
   final String value;
+  final bool isHighlight;
 
   const _HeaderItem({
     required this.label,
     required this.value,
+    this.isHighlight = false,
   });
 
   @override
@@ -199,14 +231,15 @@ class _HeaderItem extends StatelessWidget {
         Text(
           label,
           style: Theme.of(context).textTheme.bodySmall?.copyWith(
-            color: Theme.of(context).colorScheme.onPrimaryContainer.withOpacity(0.7),
+            color: Theme.of(context).colorScheme.onPrimaryContainer.withValues(alpha: 0.7),
           ),
         ),
         const SizedBox(height: 2),
         Text(
           value,
           style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-            fontWeight: FontWeight.w600,
+            fontWeight: isHighlight ? FontWeight.bold : FontWeight.w600,
+            fontSize: isHighlight ? 16 : null,
             color: Theme.of(context).colorScheme.onPrimaryContainer,
           ),
         ),

@@ -14,9 +14,13 @@ class ScheduleCalculator {
   Decimal monthlyRateFromTea(Decimal tea) {
     if (tea == Decimal.zero) return Decimal.zero;
     
+    // Use higher precision for large loan calculations
     final teaDouble = tea.toDouble();
     final monthlyRate = math.pow(1 + teaDouble, 1.0 / 12.0) - 1;
-    return Decimal.parse(monthlyRate.toString());
+    
+    // Round to prevent precision issues with very small rates
+    final roundedRate = (monthlyRate * 1e15).round() / 1e15;
+    return Decimal.parse(roundedRate.toString());
   }
 
   /// Build initial schedule without early repayments
@@ -33,16 +37,37 @@ class ScheduleCalculator {
 
     for (int i = 1; i <= loan.plazoMeses; i++) {
       final installmentDate = nthInstallmentDate(loan.fechaInicio, i);
+      
+      // Ensure balance precision doesn't degrade
+      if (currentBalance <= Decimal.zero) break;
+      
       final interest = currentBalance * monthlyRate;
       var amortization = fixedPayment - interest;
       
+      // Round interest to reasonable precision to avoid extreme decimal places
+      final interestRounded = Decimal.parse(interest.toDouble().toStringAsFixed(2));
+      
+      // Recalculate amortization with rounded interest
+      var amortizationRounded = fixedPayment - interestRounded;
+      
       // Handle final installment adjustment
-      if (amortization > currentBalance) {
-        amortization = currentBalance;
+      if (amortizationRounded > currentBalance) {
+        amortizationRounded = currentBalance;
       }
       
-      final actualPayment = interest + amortization;
-      final finalBalance = currentBalance - amortization;
+      // Ensure amortization is valid
+      if (amortizationRounded < Decimal.zero) {
+        amortizationRounded = Decimal.zero;
+      }
+      
+      final actualPayment = interestRounded + amortizationRounded;
+      var finalBalance = currentBalance - amortizationRounded;
+      
+      // Round very small balances to zero to prevent precision issues
+      if (finalBalance < Decimal.parse('0.01')) {
+        finalBalance = Decimal.zero;
+        amortizationRounded = currentBalance; // Adjust amortization to match
+      }
       
       // Calculate insurance
       final insurance = calculateInsurance(
@@ -58,8 +83,8 @@ class ScheduleCalculator {
         numero: i,
         fecha: installmentDate,
         saldoInicial: currentBalance,
-        interes: interest,
-        amortizacion: amortization,
+        interes: interestRounded,
+        amortizacion: amortizationRounded,
         pagoCuota: actualPayment,
         seguro: insurance,
         totalMes: totalMonth,
@@ -181,11 +206,38 @@ class ScheduleCalculator {
     // Calculate new term
     int newRemainingTerms;
     if (monthlyRate > Decimal.zero) {
-      final numerator = math.log(1 - (monthlyRate * newBalance / currentPayment).toDouble());
-      final denominator = math.log(1 + monthlyRate.toDouble());
-      newRemainingTerms = (-numerator / denominator).ceil();
+      final ratio = (monthlyRate * newBalance / currentPayment).toDouble();
+      final logArg = 1 - ratio;
+      
+      // Validate mathematical inputs
+      if (logArg <= 0 || logArg >= 1) {
+        // Fallback to simple division if log calculation would fail
+        newRemainingTerms = (newBalance / currentPayment).ceil().toInt();
+      } else {
+        final numerator = math.log(logArg);
+        final denominator = math.log(1 + monthlyRate.toDouble());
+        
+        if (!numerator.isFinite || !denominator.isFinite || denominator == 0) {
+          newRemainingTerms = (newBalance / currentPayment).ceil().toInt();
+        } else {
+          final result = -numerator / denominator;
+          if (!result.isFinite || result <= 0) {
+            newRemainingTerms = (newBalance / currentPayment).ceil().toInt();
+          } else {
+            newRemainingTerms = result.ceil();
+          }
+        }
+      }
     } else {
       newRemainingTerms = (newBalance / currentPayment).ceil().toInt();
+    }
+    
+    // Ensure reasonable bounds
+    if (newRemainingTerms <= 0) {
+      newRemainingTerms = 1;
+    }
+    if (newRemainingTerms > 1000) { // Reasonable maximum
+      newRemainingTerms = 1000;
     }
 
     // Generate remaining installments with fixed payment
@@ -196,15 +248,31 @@ class ScheduleCalculator {
       final installmentDate = nthInstallmentDate(loan.fechaInicio, installmentNumber);
       
       final interest = currentBalance * monthlyRate;
-      var amortization = currentPayment - interest;
+      
+      // Round interest to reasonable precision to avoid extreme decimal places
+      final interestRounded = Decimal.parse(interest.toDouble().toStringAsFixed(2));
+      
+      // Recalculate amortization with rounded interest
+      var amortizationRounded = currentPayment - interestRounded;
       
       // Adjust final installment
-      if (i == newRemainingTerms - 1 || amortization > currentBalance) {
-        amortization = currentBalance;
+      if (i == newRemainingTerms - 1 || amortizationRounded > currentBalance) {
+        amortizationRounded = currentBalance;
       }
       
-      final actualPayment = interest + amortization;
-      final finalBalance = currentBalance - amortization;
+      // Ensure amortization is valid
+      if (amortizationRounded < Decimal.zero) {
+        amortizationRounded = Decimal.zero;
+      }
+      
+      final actualPayment = interestRounded + amortizationRounded;
+      var finalBalance = currentBalance - amortizationRounded;
+      
+      // Round very small balances to zero to prevent precision issues
+      if (finalBalance < Decimal.parse('0.01')) {
+        finalBalance = Decimal.zero;
+        amortizationRounded = currentBalance;
+      }
       
       final insurance = calculateInsurance(
         loan.seguroConfig, 
@@ -217,8 +285,8 @@ class ScheduleCalculator {
         numero: installmentNumber,
         fecha: installmentDate,
         saldoInicial: currentBalance,
-        interes: interest,
-        amortizacion: amortization,
+        interes: interestRounded,
+        amortizacion: amortizationRounded,
         pagoCuota: actualPayment,
         seguro: insurance,
         totalMes: actualPayment + insurance,
@@ -258,15 +326,31 @@ class ScheduleCalculator {
       final installmentDate = nthInstallmentDate(loan.fechaInicio, installmentNumber);
       
       final interest = currentBalance * monthlyRate;
-      var amortization = newPayment - interest;
+      
+      // Round interest to reasonable precision to avoid extreme decimal places
+      final interestRounded = Decimal.parse(interest.toDouble().toStringAsFixed(2));
+      
+      // Recalculate amortization with rounded interest
+      var amortizationRounded = newPayment - interestRounded;
       
       // Adjust final installment
-      if (i == remainingTerms - 1 || amortization > currentBalance) {
-        amortization = currentBalance;
+      if (i == remainingTerms - 1 || amortizationRounded > currentBalance) {
+        amortizationRounded = currentBalance;
       }
       
-      final actualPayment = interest + amortization;
-      final finalBalance = currentBalance - amortization;
+      // Ensure amortization is valid
+      if (amortizationRounded < Decimal.zero) {
+        amortizationRounded = Decimal.zero;
+      }
+      
+      final actualPayment = interestRounded + amortizationRounded;
+      var finalBalance = currentBalance - amortizationRounded;
+      
+      // Round very small balances to zero to prevent precision issues
+      if (finalBalance < Decimal.parse('0.01')) {
+        finalBalance = Decimal.zero;
+        amortizationRounded = currentBalance;
+      }
       
       final insurance = calculateInsurance(
         loan.seguroConfig, 
@@ -279,8 +363,8 @@ class ScheduleCalculator {
         numero: installmentNumber,
         fecha: installmentDate,
         saldoInicial: currentBalance,
-        interes: interest,
-        amortizacion: amortization,
+        interes: interestRounded,
+        amortizacion: amortizationRounded,
         pagoCuota: actualPayment,
         seguro: insurance,
         totalMes: actualPayment + insurance,
@@ -325,18 +409,16 @@ class ScheduleCalculator {
 
   /// Map a date to the corresponding installment index
   int mapDateToInstallmentIndex(DateTime start, DateTime target) {
-    if (target.isBefore(start)) return 0;
+    if (target.isBefore(start) || target.isAtSameMomentAs(start)) return 0;
     
-    var current = start;
     int index = 0;
-    
-    while (current.isBefore(target) || current.isAtSameMomentAs(target)) {
+    while (true) {
       index++;
-      current = nthInstallmentDate(start, index + 1);
-      if (current.isAfter(target)) break;
+      final installmentDate = nthInstallmentDate(start, index);
+      if (target.isBefore(installmentDate) || target.isAtSameMomentAs(installmentDate)) {
+        return index - 1;
+      }
     }
-    
-    return index;
   }
 
   /// Calculate the date for the nth installment
@@ -369,9 +451,35 @@ class ScheduleCalculator {
     final rDouble = monthlyRate.toDouble();
     final nDouble = terms.toDouble();
     
-    final numerator = principal.toDouble() * rDouble;
-    final denominator = 1 - math.pow(1 + rDouble, -nDouble);
+    // Validate inputs to prevent mathematical errors
+    if (rDouble <= 0 || nDouble <= 0) {
+      return Decimal.zero;
+    }
     
-    return Decimal.parse((numerator / denominator).toString());
+    final onePlusR = 1 + rDouble;
+    final powerResult = math.pow(onePlusR, -nDouble);
+    
+    // Check for edge cases that could cause infinite values
+    if (!powerResult.isFinite || powerResult >= 1.0 || powerResult <= 0) {
+      // Fallback to simple division if power calculation fails
+      return Decimal.parse((principal.toDouble() / terms).toString());
+    }
+    
+    final numerator = principal.toDouble() * rDouble;
+    final denominator = 1 - powerResult;
+    
+    if (denominator <= 0 || !denominator.isFinite) {
+      // Fallback calculation
+      return Decimal.parse((principal.toDouble() / terms).toString());
+    }
+    
+    final result = numerator / denominator;
+    
+    if (!result.isFinite) {
+      // Fallback calculation
+      return Decimal.parse((principal.toDouble() / terms).toString());
+    }
+    
+    return Decimal.parse(result.toString());
   }
 }

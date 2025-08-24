@@ -8,6 +8,12 @@ class LoanFormatters {
     decimalDigits: 2,
   );
 
+  static final NumberFormat _accountingFormat = NumberFormat.currency(
+    locale: 'es_CO', // Colombian locale uses dots for thousands
+    symbol: '\$',
+    decimalDigits: 0,
+  );
+
   static final NumberFormat _percentFormat = NumberFormat.decimalPercentPattern();
 
   static final DateFormat _dateFormat = DateFormat('yyyy-MM-dd');
@@ -53,5 +59,29 @@ class LoanFormatters {
   static String formatNumber(Decimal number) {
     final format = NumberFormat('#,##0.00');
     return format.format(number.toDouble());
+  }
+
+  /// Format large amounts as accounting numbers (no decimals, with dots as thousand separators)
+  static String formatPrincipal(Decimal amount) {
+    try {
+      return _accountingFormat.format(amount.toDouble());
+    } catch (e) {
+      // Fallback to manual formatting if locale is not available
+      final value = amount.toDouble().round();
+      final valueStr = value.toString();
+      
+      // Add dots every 3 digits from the right
+      String result = '';
+      int count = 0;
+      for (int i = valueStr.length - 1; i >= 0; i--) {
+        if (count > 0 && count % 3 == 0) {
+          result = '.$result';
+        }
+        result = valueStr[i] + result;
+        count++;
+      }
+      
+      return '\$$result';
+    }
   }
 }

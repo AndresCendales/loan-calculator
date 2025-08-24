@@ -287,7 +287,7 @@ class _EarlyFormPageState extends ConsumerState<EarlyFormPage> {
       children: [
         Expanded(
           child: OutlinedButton(
-            onPressed: () => context.pop(),
+            onPressed:  _isLoading ? null : () => context.go('/loan/${widget.loanId}'),
             child: const Text('Cancel'),
           ),
         ),
@@ -359,7 +359,8 @@ class _EarlyFormPageState extends ConsumerState<EarlyFormPage> {
             backgroundColor: Colors.green,
           ),
         );
-        context.pop();
+        // Navigate back to loan detail page
+        context.go('/loan/${widget.loanId}');
       }
     } catch (e) {
       if (mounted) {
